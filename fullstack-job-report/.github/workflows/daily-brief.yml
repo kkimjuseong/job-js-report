@@ -1,0 +1,23 @@
+name: 풀스택 채용 공고 데일리 브리핑
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 매일 07:00 KST (= 전날 22:00 UTC)
+  workflow_dispatch:       # Actions 탭에서 수동 실행(Run workflow) 가능
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: 수집 + 카카오 전송
+        env:
+          KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+        run: python collect.py --send
