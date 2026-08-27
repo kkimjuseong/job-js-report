@@ -6,9 +6,10 @@
 
 리멤버는 SPA + 비공개 API라 requests로 수집 불가(추후 보강).
 사용: python collect.py          (digest.txt 저장 + 화면 출력)
-      python collect.py --send   (수집 + 카카오 전송)
+      python collect.py --send   (수집 + 카카오 전송, 이미 보낸 공고는 제외, 하루 1회)
+      python collect.py --send --force   (오늘 이미 보냈어도 재전송)
 """
-import sys, requests, re, html as ihtml, datetime
+import sys, os, json, requests, re, html as ihtml, datetime
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 H = {"User-Agent": UA, "Accept-Language": "ko-KR,ko;q=0.9"}
@@ -19,6 +20,14 @@ SENIOR = ["시니어", "리드", "lead", "팀장", "매니저", "수석", "책�
 MAX_EXP_FLOOR = 4          # 요구 경력 하한이 이 값 이하면 통과
 PER_CATEGORY = 3           # 분야별 최대 개수
 TOTAL = 10                 # 전체 최대 개수
+SENT_FILE = "sent.json"    # 이미 보낸 공고 기록 (링크 → 보낸 날짜). 워크플로가 커밋해서 유지
+SENT_KEEP_DAYS = 45        # 이 기간 지난 기록은 정리 (공고 재게시 대비)
+KST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def today_kst():
+    """GitHub 러너는 UTC라 '오늘'을 한국 기준으로 계산한다."""
+    return datetime.datetime.now(KST).date()
 
 # 분야 → 검색 키워드 (사이트별로 각 키워드 1회 검색). 순서 = 우선순위.
 CATEGORIES = {
@@ -208,6 +217,27 @@ def collect_jobkorea():
     return out
 
 
+def load_sent():
+    """sent.json → {link: 'YYYY-MM-DD'}; 오래된 항목은 버린다."""
+    try:
+        data = json.load(open(SENT_FILE, encoding="utf-8"))
+    except Exception:
+        return {}
+    cutoff = (today_kst() - datetime.timedelta(days=SENT_KEEP_DAYS)).isoformat()
+    return {k: v for k, v in data.items() if v >= cutoff}
+
+
+def save_sent(sent, items):
+    today = today_kst().isoformat()
+    for it in items:
+        sent[it["link"]] = today
+    json.dump(sent, open(SENT_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=0)
+
+
+def already_sent_today(sent):
+    return today_kst().isoformat() in sent.values()
+
+
 def dedup(items):
     seen, out = set(), []
     for it in items:
@@ -241,7 +271,7 @@ def pick(items):
 
 
 def build_digest(items):
-    today = datetime.date.today().isoformat()
+    today = today_kst().isoformat()
     lines = [f"📅 {today} 풀스택 채용 공고 브리핑", ""]
     n = len(items)
     for i, it in enumerate(items, 1):
@@ -259,6 +289,10 @@ def build_digest(items):
 
 
 def main():
+    sent = load_sent()
+    if "--send" in sys.argv and already_sent_today(sent) and "--force" not in sys.argv:
+        print("오늘 이미 보냈으므로 종료합니다. (강제 재전송: --force)")
+        return
     items = []
     for fn in (collect_wanted, collect_saramin, collect_jobkorea):
         try:
@@ -267,9 +301,11 @@ def main():
             items += got
         except Exception as e:
             print(f"{fn.__name__} 실패:", repr(e)[:80])
-    picked = pick(dedup(items))
+    fresh = [it for it in dedup(items) if it["link"] not in sent]
+    print(f"중복 제거 후 {len(dedup(items))}건, 이미 보낸 것 제외 후 {len(fresh)}건")
+    picked = pick(fresh)
     if not picked:
-        print("수집된 공고가 없어 전송을 건너뜁니다(빈 브리핑 금지).")
+        print("새 공고가 없어 전송을 건너뜁니다(빈 브리핑 금지).")
         return
     digest = build_digest(picked)
     open("digest.txt", "w", encoding="utf-8").write(digest)
@@ -278,7 +314,8 @@ def main():
     if "--send" in sys.argv:
         import send_kakao
         send_kakao.send(digest)
-        print("\n[전송 완료] 카카오톡으로 발송했습니다.")
+        save_sent(sent, picked)
+        print("\n[전송 완료] 카카오톡으로 발송했습니다. sent.json 갱신.")
 
 
 if __name__ == "__main__":

@@ -2,8 +2,17 @@ name: 풀스택 채용 공고 데일리 브리핑
 
 on:
   schedule:
-    - cron: "0 22 * * *"   # 매일 07:00 KST (= 전날 22:00 UTC)
-  workflow_dispatch:       # Actions 탭에서 수동 실행(Run workflow) 가능
+    # GitHub 크론은 지연/누락이 잦아 두 번 예약. collect.py가 하루 1회만 보내도록 막는다.
+    - cron: "50 21 * * *"   # 06:50 KST
+    - cron: "20 22 * * *"   # 07:20 KST (앞 실행이 밀리거나 누락됐을 때 보험)
+  workflow_dispatch:        # Actions 탭에서 수동 실행(Run workflow) 가능
+
+permissions:
+  contents: write           # sent.json 커밋용
+
+concurrency:
+  group: daily-brief
+  cancel-in-progress: false
 
 jobs:
   brief:
@@ -21,3 +30,9 @@ jobs:
           KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
           KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
         run: python collect.py --send
+      - name: 보낸 공고 기록 저장 (sent.json 커밋)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sent.json || true
+          git diff --cached --quiet || (git commit -m "chore: update sent.json [skip ci]" && git push)
